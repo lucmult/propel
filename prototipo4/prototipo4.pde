@@ -5,21 +5,28 @@
 #define SWITCH 12
 #define DEBUG 13
 
+#define CLICK_LIMIT 500
+#define MINTRIGGER 600
+#define MAXTRIGGER 7300
+
+
 // variaveis do estado da chave
 int current_state = 1;
 int last_state = 1;
 int timing;
-int click_interval = 500;
 int click_start;
 
+// variaveis de tempo de interrupcao
+int now = 0;
+int last_zero = 0;
+
+
 // variaveis do estado do triac
+int factor = 255;
 int power = 0;
 int rate = 0;
-int trigger = 0;
+int trigger = MAXTRIGGER;
 int zero;
-int mintrigger = 600;
-int maxtrigger = 7000;
-int factor = 200;
 int swing = 1;
 
 void setup(){
@@ -34,8 +41,6 @@ void setup(){
   // conecta interrupcao ao zero-cross detector
   attachInterrupt(0, zeroed, RISING);
   
-  // inicia porta serial
-  Serial.begin(9600);
 }
 
 
@@ -45,10 +50,12 @@ void loop(){
 
   digitalWrite(DEBUG, power);
   
-  // se a chave foi acionada nesse ciclo, marque o tempo e retorne
+  // se a chave foi acionada nesse ciclo, marca o tempo, memoriza estado, 
+  // inverte swing e retorna
   if (last_state != current_state && !current_state){
     click_start = millis();
     last_state = current_state;
+    swing = -swing;
     return;
   }  
 
@@ -58,7 +65,7 @@ void loop(){
   // se a chave foi solta nesse ciclo, adotamos ação de acordo com o tempo
   if (last_state != current_state && current_state){
     // se pulso rápido, modo on/off
-    if (timing < click_interval){
+    if (timing < CLICK_LIMIT){
       // modo on/off, alterna estado
       power = !power;    
     }  
@@ -66,7 +73,7 @@ void loop(){
 
   // se a chave está sendo segurada, adota ação de acordo com o tempo e estado
   if (last_state == current_state && ! current_state){
-    if (timing >= click_interval){
+    if (timing >= CLICK_LIMIT){
       // se ligado, dimmeriza
       if (power){
         // modo dimmer      
@@ -84,32 +91,36 @@ void loop(){
         power = 1;
         rate = 0;
       }
-    }
+      // limita o ciclo aos valores minimo e maximo
+      trigger = map(rate, 0, factor, MAXTRIGGER, MINTRIGGER);        
+    }    
   }    
-
-
+  
+  // memoriza estado
   last_state = current_state;
   
-  
-  // limita o ciclo aos valores minimo e maximo
-  trigger = map(rate, 0, factor, maxtrigger, mintrigger);  
+
+  // delay saudável
+  delay(5);
 }
   
  
 void zeroed(){
+  //now = micros();
+  //if (now - last_zero < 6000){
+  //  return;
+  //}
+  
   if (power){
     // aguarda o ponto certo da onda para disparar
     delayMicroseconds(trigger);
-    // dispara o pulso de 1us
+    // dispara o pulso de 10us
     digitalWrite(TRIAC, HIGH);
-    delayMicroseconds(1);
+    delayMicroseconds(10);
     digitalWrite(TRIAC, LOW);
     // reseta a flag do zero cross
-    //zero = 0;
   }
-  // sinaliza que a rede passou pelo zero
-  //zero = 1;
-
+  //last_zero = now;
 }
   
   
