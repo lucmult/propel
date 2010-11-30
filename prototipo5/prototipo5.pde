@@ -7,7 +7,9 @@
 
 #define CLICK_LIMIT 500
 #define MINTRIGGER 600
-// 7500 parecia o ideal, mas 7000 não chega a desligar a lampada
+/* 7500 parecia o ideal, mas 7000 não chega a desligar a lampada, 
+   deixando a luz bem fraca, sabendo que não está desligada
+*/
 #define MAXTRIGGER 7000
 #define FACTOR 255
 
@@ -19,7 +21,6 @@ int click_start;
 
 // variaveis de tempo de interrupcao
 volatile int last_zero = 0;
-volatile int zero = 0;
 
 int now = 0;
 int last_update = 0;
@@ -54,11 +55,11 @@ void loop(){
   now = micros();
   
   // atualiza o triac assincronamente
-  if (power && zero){
-    if (now - last_zero >= trigger){
-      digitalWrite(TRIAC, HIGH);
-      zero = 0;
-    }
+  // se está ligado, se ainda não atualizamos nessa passagem pelo zero, 
+  // se agora já é depois do tempo mínimo de gatilho, dispara
+  if (power && last_zero && now - last_zero >= trigger){
+    digitalWrite(TRIAC, HIGH);
+    last_zero = 0;
   }
   
   // atualiza a cada 5ms
@@ -66,7 +67,6 @@ void loop(){
     return;
   }
   
-
   current_state = digitalRead(SWITCH);
 
   digitalWrite(DEBUG, power);
@@ -133,38 +133,9 @@ void loop(){
  
  
 void zeroed(){
+ // desliga o triac na passagem pelo zero
  digitalWrite(TRIAC, LOW);
- zero = 1;
+ // marca o tempo da passagem;
  last_zero = micros();
 }
-  
- 
-void active_zeroed(){
-  /* essa versao assume que parte do zero, aguarda o meio da onda,
-     dispara o pulso e termina com o triac em nivel baixo
-  */     
-  if (power){
-    // aguarda o ponto certo da onda para disparar
-    delayMicroseconds(trigger);
-    // dispara o pulso de 10us
-    digitalWrite(TRIAC, HIGH);
-    delayMicroseconds(10);
-    digitalWrite(TRIAC, LOW);
-  }
-}
-  
-void passive_zeroed(){
-  /* essa outra versão, mais simples, assume que parte do zero,
-     corta o pulso para que o triac desligue, aguarda o meio da onda,
-     dispara o pulso e conta que o triac desativará no
-     próximo ciclo
-  */
-  digitalWrite(TRIAC, LOW);
-  if (power){
-    delayMicroseconds(trigger);
-    digitalWrite(TRIAC, HIGH);
-  }
-}
-  
-  
   
