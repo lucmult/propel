@@ -7,8 +7,9 @@
 
 #define CLICK_LIMIT 500
 #define MINTRIGGER 600
-#define MAXTRIGGER 7300
-
+// 7500 parecia o ideal, mas 7000 não chega a desligar a lampada
+#define MAXTRIGGER 7000
+#define FACTOR 255
 
 // variaveis do estado da chave
 int current_state = 1;
@@ -22,11 +23,10 @@ int last_zero = 0;
 
 
 // variaveis do estado do triac
-int factor = 255;
 int power = 0;
 int rate = 0;
+int count = 0;
 int trigger = MAXTRIGGER;
-int zero;
 int swing = 1;
 
 void setup(){
@@ -39,7 +39,7 @@ void setup(){
   digitalWrite(SWITCH, HIGH);
   
   // conecta interrupcao ao zero-cross detector
-  attachInterrupt(0, zeroed, RISING);
+  attachInterrupt(0, active_zeroed, RISING);
   
 }
 
@@ -67,8 +67,9 @@ void loop(){
     // se pulso rápido, modo on/off
     if (timing < CLICK_LIMIT){
       // modo on/off, alterna estado
-      power = !power;    
-    }  
+      power = !power;
+    }    
+    
   }
 
   // se a chave está sendo segurada, adota ação de acordo com o tempo e estado
@@ -77,14 +78,17 @@ void loop(){
       // se ligado, dimmeriza
       if (power){
         // modo dimmer      
-        rate += swing;   
-        rate = constrain(rate, 0, factor);
-
-        if (rate == factor)
-          swing = -1;
+        rate += swing;
+        // restringe rate a valor entre 0 e 255   
+        rate = constrain(rate, 0, FACTOR);
         
-        if (rate == 0)
+        if (rate == FACTOR){
+          swing = -1;
+        }
+        
+        if (rate == 0){
           swing = 1;
+        }
            
       } else {
         // caso contrario, liga
@@ -92,7 +96,7 @@ void loop(){
         rate = 0;
       }
       // limita o ciclo aos valores minimo e maximo
-      trigger = map(rate, 0, factor, MAXTRIGGER, MINTRIGGER);        
+      trigger = map(rate, 0, FACTOR, MAXTRIGGER, MINTRIGGER);        
     }    
   }    
   
@@ -105,12 +109,10 @@ void loop(){
 }
   
  
-void zeroed(){
-  //now = micros();
-  //if (now - last_zero < 6000){
-  //  return;
-  //}
-  
+void active_zeroed(){
+  /* essa versao assume que parte do zero, aguarda o meio da onda,
+     dispara o pulso e termina com o triac em nivel baixo
+  */     
   if (power){
     // aguarda o ponto certo da onda para disparar
     delayMicroseconds(trigger);
@@ -118,9 +120,22 @@ void zeroed(){
     digitalWrite(TRIAC, HIGH);
     delayMicroseconds(10);
     digitalWrite(TRIAC, LOW);
-    // reseta a flag do zero cross
   }
-  //last_zero = now;
+}
+  
+void passive_zeroed(){
+  /* essa outra versão, mais simples, assume que parte do zero,
+     corta o pulso para que o triac desligue, aguarda o meio da onda,
+     dispara o pulso e conta que o triac desativará no
+     próximo ciclo
+  */
+  if (power){
+    digitalWrite(TRIAC, LOW);
+    delayMicroseconds(trigger);
+    digitalWrite(TRIAC, HIGH);
+  } else {
+    digitalWrite(TRIAC, LOW);
+  }
 }
   
   
