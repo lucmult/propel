@@ -4,12 +4,12 @@
 #define SWITCH 12
 #define DEBUG 13
 
-#define CLICK_LIMIT 500
-#define MINTRIGGER 600
-/* 7500 parecia o ideal, mas 7000 não chega a desligar a lampada, 
-   deixando a luz bem fraca, sabendo que não está desligada
-*/
-#define MAXTRIGGER 7000
+#define MAX_CLICK 300
+#define MIN_CLICK 10
+
+// o disparo é feito em (256 - trigger) * 64us
+#define MIN_TRIGGER 139 
+#define MAX_TRIGGER 255
 #define FACTOR 255
 
 // variaveis do estado da chave
@@ -19,22 +19,17 @@ int timing;
 int click_start;
 
 // variaveis de tempo de interrupcao
-volatile int last_zero = 0;
-
 int now = 0;
 int last_update = 0;
+int last_switch = 0;
 
 
 // variaveis do estado do triac
-int power = 0;
-int rate = 0;
-int count = 0;
-int trigger = MAXTRIGGER;
+int power = 0; // inicia desligado
+int rate = 64; // inicia com 1/4 da luz
+unsigned int trigger; 
 int swing = 1;
 
-// flags do timer2
-unsigned int tcnt2;
-int toggle = 1;
 
 
 void setup(){
@@ -45,93 +40,81 @@ void setup(){
   
   // habilita resistor de pull-up da chave
   digitalWrite(SWITCH, HIGH);
-  
-  digitalWrite(DEBUG, toggle);
+  digitalWrite(TRIAC, LOW);  
   
   // conecta interrupcao ao zero-cross detector
   attachInterrupt(0, zeroed, RISING);  
 
   // configura timer2  
 
-  // primeiro, desabilita enquanto configuramos
+  // primeiro, desabilita o timer enquanto configuramos
   TIMSK2 &= ~(1<<TOIE2); 
   
-  // configura em modo normal
+  // coloca o timer em modo de contagem simples, sem pwm
   TCCR2A &= ~((1<<WGM21) | (1<<WGM20));  
   TCCR2B &= ~(1<<WGM22); 
   
-  // seleciona clock interno
+  // seleciona o clock interno
   ASSR &= ~(1<<AS2);
   
-  // desabilita comparacao (queremos só overflow)
+  // desabilita comparacao, deixando apenas overflow
   TIMSK2 &= ~(1<<OCIE2A);
   
-  // configura o pré-escalador para 16mhz / 128
-  TCCR2B |= (1<<CS22)  | (1<<CS20); // Set bits  
-  TCCR2B &= ~(1<<CS21);             // Clear bit
-  
- /* We need to calculate a proper value to load the timer counter. 
-  * The following loads the value 131 into the Timer 2 counter register 
-  * The math behind this is: 
-  * (CPU frequency) / (prescaler value) = 125000 Hz = 8us. 
-  * (desired period) / 8us = 125. 
-  * MAX(uint8) + 1 - 125 = 131; 
-  */  
+  // configura o pré-escalador para 16mhz / 1024
+  TCCR2B |= (1<<CS22)  | (1<<CS21) | (1<<CS20); 
 
-  // Save value globally for later reload in ISR */  
-  tcnt2 = 1;   
+  // delay será de trigger * 64us
+  setTrigger();
    
-  // Finally load end enable the timer */  
-  TCNT2 = tcnt2;  
+  // carrega a taxa atual e inicia o timer
+  TCNT2 = trigger;  
+
   TIMSK2 |= (1<<TOIE2);
 
 }
 
    
- /* 
-  * Install the Interrupt Service Routine (ISR) for Timer2 overflow. 
-  * This is normally done by writing the address of the ISR in the 
-  * interrupt vector table but conveniently done by using ISR()  */  
-ISR(TIMER2_OVF_vect) {  
-  /* Reload the timer */  
-   //TCNT2 = tcnt2;  
-   /* Write to a digital pin so that we can confirm our timer */  
-   toggle = ~toggle;  
-   digitalWrite(DEBUG, toggle);  
-} 
-
-
 
 void loop(){
-  current_state = digitalRead(SWITCH);
-
+  // inicializa variáveis usadas no loop
   digitalWrite(DEBUG, power);
+  current_state = digitalRead(SWITCH);
+  now = millis();
   
+  // se houve mudança de estado da chave, verifica o tempo
+  if (last_state != current_state){
+    timing = now - last_switch;
+    last_switch = now;
+    // se tempo abaixo do mínimo, ignora
+    if (timing < MIN_CLICK){
+      return;
+    }
+  }
+
   // se a chave foi acionada nesse ciclo, marca o tempo, memoriza estado, 
   // inverte swing e retorna
   if (last_state != current_state && !current_state){
-    click_start = millis();
+    click_start = now;
     last_state = current_state;
     swing = -swing;
     return;
   }  
 
   // dependendo do tempo, entramos no modo on/off ou dimmer
-  timing = millis() - click_start;
-
+  timing = now - click_start;
+  
   // se a chave foi solta nesse ciclo, adotamos ação de acordo com o tempo
   if (last_state != current_state && current_state){
     // se pulso rápido, modo on/off
-    if (timing < CLICK_LIMIT){
+    if (timing < MAX_CLICK){
       // modo on/off, alterna estado
       power = !power;
     }    
-    
   }
 
   // se a chave está sendo segurada, adota ação de acordo com o tempo e estado
   if (last_state == current_state && ! current_state){
-    if (timing >= CLICK_LIMIT){
+    if (timing >= MAX_CLICK){
       // se ligado, dimmeriza
       if (power){
         // modo dimmer      
@@ -152,28 +135,43 @@ void loop(){
         power = 1;
         rate = 0;
       }
-      // limita o ciclo aos valores minimo e maximo
-      trigger = map(rate, 0, FACTOR, MAXTRIGGER, MINTRIGGER);
     }    
   }    
   
+  // atualiza o ciclo
+  setTrigger();
+
   // memoriza estado
   last_state = current_state;  
 
-  // delay saudável
-  delay(5);  
+  // memoriza a hora da ultima atualizacao
+  delay(5);
+  
 }
  
  
+void setTrigger(){
+   trigger = map(rate, 0, FACTOR, MIN_TRIGGER, MAX_TRIGGER);
+}
+ 
+
+// interrupcao do zero cross detector 
 void zeroed(){
- // desliga o triac na passagem pelo zero
- digitalWrite(TRIAC, LOW);
+  // desliga o triac na passagem pelo zero
+  digitalWrite(TRIAC, LOW);
+  // zera o contador
+  TCNT2 = trigger;
+  // reinicia o timer
+  TIMSK2 |= (1<<TOIE2);
 }
 
-void trigger_triac(){
+// interrupcao do timer
+ISR(TIMER2_OVF_vect) {  
+  // quando disparada, desativa o timer
+  TIMSK2 &= ~(1<<TOIE2);
+  // dispara o triac
   if (power){
     digitalWrite(TRIAC, HIGH);
   }
 }
 
-  
